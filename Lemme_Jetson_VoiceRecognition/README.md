@@ -1,3 +1,6 @@
+pip install requirement.txt 로 설치,
+python3 demoMerge.py 실행. 
+
 반드시 직접 발급한 Open AI API Key를 넣을 것  
 
 Yeelight(불 켜고 끄기 관련해서는) 관련 제품 구매 후, 
