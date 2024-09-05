@@ -14,9 +14,8 @@ import io
 from yeelight import Bulb  # Importing Yeelight functionality
 
 # YOUR_API_KEY for wake-up word recognition and NLP
-access_key = 'r368CWMWz76rlrA/6ChFphK/NDjhdYhDNQNFXX9AmW2+WdLYAgdo8A=='
-openai_api_key = 'sk-sUZgL_jlqkMyvP0zyR67mLlFoSlB-kZcvaKkKkdyFOT3BlbkFJ6MDqmF-GfFh2iYZc7d8QfV17G4GSnL5IohO8mXk80A'
-
+access_key = 'your key'
+openai_api_key = 'your key'
 
 # Yeelight bulbs setup
 livingRoomBulb = Bulb("192.168.0.86")
@@ -24,23 +23,32 @@ bedRoomBulb = Bulb("192.168.0.85")
 
 # Functions for turning lights on and off
 def turn_on_light(location):
-    if location == "거실":
-        livingRoomBulb.turn_on()
-    elif location == "침실":
-        bedRoomBulb.turn_on()
+    try:
+        if location == "living room":
+            livingRoomBulb.turn_on()
+        elif location == "bedroom":
+            bedRoomBulb.turn_on()
+    except Exception as e:
+        print(f"Error turning on light in {location}: {e}")
+        return f"Error turning on light in {location}: {e}"
+    return f"Turned on the {location} light."
 
 def turn_off_light(location):
-    if location == "거실":
-        livingRoomBulb.turn_off()
-    elif location == "침실":
-        bedRoomBulb.turn_off()
+    try:
+        if location == "living room":
+            livingRoomBulb.turn_off()
+        elif location == "bedroom":
+            bedRoomBulb.turn_off()
+    except Exception as e:
+        print(f"Error turning off light in {location}: {e}")
+        return f"Error turning off light in {location}: {e}"
+    return f"Turned off the {location} light."
 
 # Variables for Wake-up word Recognition
 keyword_paths = ['lemmy_jetson_1.ppn']
 audio_device_index = -1
 sensitivities = [0.5] * len(keyword_paths)
 library_path_porcupine = '/home/expc/.local/lib/python3.10/site-packages/pvporcupine/lib/jetson/cortex-a57-aarch64/libpv_porcupine.so'
-
 
 # Variables for recording (voice activity detection)
 speech_threshold = 1.3
@@ -206,6 +214,26 @@ def streamed_audio(input_text, model='tts-1', voice='nova'):
     finally:
         audio.terminate()
 
+def handle_tool_calls(tool_calls, messages):
+    available_functions = {
+        "end_conversation": end_conversation,
+        "turn_on_light": turn_on_light,
+        "turn_off_light": turn_off_light
+    }
+
+    for tool_call in tool_calls:
+        function_name = tool_call.function.name
+        function_to_call = available_functions[function_name]
+        # Call the function and get the result (for example, turn the light on or off)
+        function_response = function_to_call(**json.loads(tool_call.function.arguments))
+        tool_message = {
+            "role": "tool",
+            "content": function_response,
+            "tool_call_id": tool_call.id  # Attach the response to the tool_call_id
+        }
+        messages.append(tool_message)  # Append the tool response message
+        print(f"Tool function {function_name} executed with response: {function_response}")
+
 def main():
     personality = "You are a social robot for the elderly and your name is LEMMY."
     messages = [{"role": "system", "content": f"{personality}"}]
@@ -226,7 +254,7 @@ def main():
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "location": {"type": "string", "description": "Location (e.g., 거실, 침실)"}
+                        "location": {"type": "string", "description": "Location (e.g., living room, bedroom)"}
                     },
                     "required": ["location"],
                 },
@@ -240,7 +268,7 @@ def main():
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "location": {"type": "string", "description": "Location (e.g., 거실, 침실)"}
+                        "location": {"type": "string", "description": "Location (e.g., living room, bedroom)"}
                     },
                     "required": ["location"],
                 },
@@ -255,6 +283,7 @@ def main():
         if not wakeUpDetect:
             wakeUpDetect = wakeUpWordRecognition()
         else:
+            dialogueEnd = False
             while not dialogueEnd:
                 pcm_data = listen_for_voice()
                 if isinstance(pcm_data, np.ndarray):
@@ -268,23 +297,13 @@ def main():
                         streamed_audio(lemmy_response)
                     
                     if tool_calls:
-                        available_functions = {
-                            "end_conversation": end_conversation,
-                            "turn_on_light": turn_on_light,
-                            "turn_off_light": turn_off_light
-                        }
-                        for tool_call in tool_calls:
-                            function_name = tool_call.function.name
-                            function_to_call = available_functions[function_name]
-                            function_response = function_to_call(**json.loads(tool_call.function.arguments))
-                            messages.append({"role": "assistant", "content": function_response})
-                        dialogueEnd = True
-                        wakeUpDetect = False
-                        break
+                        handle_tool_calls(tool_calls, messages)
+
+                    dialogueEnd = True
+                    wakeUpDetect = False
                 else:
                     print("No voice detected. Going back to wake-up word detection.")
                     wakeUpDetect = False
-                    break
 
 if __name__ == '__main__':
     main()
