@@ -15,7 +15,7 @@ from yeelight import Bulb  # Importing Yeelight functionality
 
 # YOUR_API_KEY for wake-up word recognition and NLP
 access_key = 'your key'
-openai_api_key = 'own key'
+
 
 
 # Yeelight bulbs setup
