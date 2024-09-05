@@ -13,10 +13,6 @@ import soundfile as sf
 import io
 from yeelight import Bulb  # Importing Yeelight functionality
 
-# YOUR_API_KEY for wake-up word recognition and NLP
-access_key = 'your key'
-
-
 
 # Yeelight bulbs setup
 livingRoomBulb = Bulb("192.168.0.86")
