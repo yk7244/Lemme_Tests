@@ -3,6 +3,8 @@ import struct
 import pyaudio
 import time
 import numpy as np
+import cv2
+import mediapipe as mp
 from pvrecorder import PvRecorder
 import pvporcupine
 import pvcobra
@@ -11,16 +13,118 @@ from openai import OpenAI
 import json
 import soundfile as sf
 import io
+from yeelight import Bulb  # Importing Yeelight functionality
 
 # YOUR_API_KEY for wake-up word recognition and NLP
-access_key = 'your key'
-openai_api_key = 'your key'
+access_key = 'r368CWMWz76rlrA/6ChFphK/NDjhdYhDNQNFXX9AmW2+WdLYAgdo8A=='
+openai_api_key = 'sk-sUZgL_jlqkMyvP0zyR67mLlFoSlB-kZcvaKkKkdyFOT3BlbkFJ6MDqmF-GfFh2iYZc7d8QfV17G4GSnL5IohO8mXk80A'
+
+
+# Yeelight bulbs setup
+livingRoomBulb = Bulb("192.168.0.86")
+bedRoomBulb = Bulb("192.168.0.85")
+
+# MediaPipe pose initialization
+mp_pose = mp.solutions.pose
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+
+# Global variables for camera and FPS
+camera_active = False
+COUNTER, FPS = 0, 0
+START_TIME = time.time()
+
+# Functions for turning lights on and off
+def turn_on_light(location):
+    try:
+        if location == "living room":
+            livingRoomBulb.turn_on()
+        elif location == "bedroom":
+            bedRoomBulb.turn_on()
+    except Exception as e:
+        print(f"Error turning on light in {location}: {e}")
+        return f"Error turning on light in {location}: {e}"
+    return f"Turned on the {location} light."
+
+def turn_off_light(location):
+    try:
+        if location == "living room":
+            livingRoomBulb.turn_off()
+        elif location == "bedroom":
+            bedRoomBulb.turn_off()
+    except Exception as e:
+        print(f"Error turning off light in {location}: {e}")
+        return f"Error turning off light in {location}: {e}"
+    return f"Turned off the {location} light."
+
+# Camera control functions
+def run_camera():
+    global COUNTER, FPS, START_TIME, camera_active
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 960)
+
+    with mp_pose.Pose(
+        static_image_mode=False,
+        model_complexity=1,
+        enable_segmentation=False,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5) as pose:
+
+        START_TIME = time.time()
+        while cap.isOpened() and camera_active:
+            success, image = cap.read()
+            if not success:
+                print("Ignoring empty camera frame.")
+                continue
+
+            image = cv2.cvtColor(cv2.flip(image, 1), cv2.COLOR_BGR2RGB)
+            image.flags.writeable = False
+            results = pose.process(image)
+
+            image.flags.writeable = True
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+            if results.pose_landmarks:
+                mp_drawing.draw_landmarks(
+                    image,
+                    results.pose_landmarks,
+                    mp_pose.POSE_CONNECTIONS,
+                    landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style())
+
+            COUNTER += 1
+            if (time.time() - START_TIME) > 1:
+                FPS = COUNTER / (time.time() - START_TIME)
+                COUNTER = 0
+                START_TIME = time.time()
+
+            cv2.putText(image, f'FPS: {FPS:.2f}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.imshow('MediaPipe Pose', image)
+
+            if cv2.waitKey(5) & 0xFF == 27:  # Exit if 'Esc' is pressed
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+def turn_on_camera():
+    global camera_active
+    if not camera_active:
+        print("Turning on camera...")
+        camera_active = True
+        run_camera()
+
+def turn_off_camera():
+    global camera_active
+    if camera_active:
+        print("Turning off camera...")
+        camera_active = False
 
 # Variables for Wake-up word Recognition
 keyword_paths = ['lemmy_jetson_1.ppn']
 audio_device_index = -1
 sensitivities = [0.5] * len(keyword_paths)
-library_path_porcupine = 'your path'
+library_path_porcupine = '/home/expc/.local/lib/python3.10/site-packages/pvporcupine/lib/jetson/cortex-a57-aarch64/libpv_porcupine.so'
 
 # Variables for recording (voice activity detection)
 speech_threshold = 1.3
@@ -81,49 +185,51 @@ def listen_for_voice():
     timeout = 5
     frames = []
 
-    try:
-        while True:
-            pcm = audio_stream.read(cobra.frame_length, exception_on_overflow=False)
-            pcm = struct.unpack_from("h" * cobra.frame_length, pcm)
-            voice_activity = cobra.process(pcm)
+    while True:
+        pcm = audio_stream.read(cobra.frame_length, exception_on_overflow=False)
+        pcm = struct.unpack_from("h" * cobra.frame_length, pcm)
+        voice_activity = cobra.process(pcm)
 
-            if voice_activity > 0.3:
+        if voice_activity > 0.3:
+            frames.append(pcm)
+            print("Voice started")
+            while True:
+                pcm = audio_stream.read(cobra.frame_length, exception_on_overflow=False)
+                pcm = struct.unpack_from("h" * cobra.frame_length, pcm)
+                voice_activity = cobra.process(pcm)
                 frames.append(pcm)
-                print("Voice started")
-                while True:
-                    pcm = audio_stream.read(cobra.frame_length, exception_on_overflow=False)
-                    pcm = struct.unpack_from("h" * cobra.frame_length, pcm)
-                    voice_activity = cobra.process(pcm)
-                    frames.append(pcm)
 
-                    if voice_activity <= 0.3:
-                        if len(frames) > 0:
-                            last_voice_time = time.time()
-                            while time.time() - last_voice_time <= speech_threshold:
-                                pcm = audio_stream.read(cobra.frame_length, exception_on_overflow=False)
-                                pcm = struct.unpack_from("h" * cobra.frame_length, pcm)
-                                voice_activity = cobra.process(pcm)
-                                if voice_activity > 0.3:
-                                    frames.append(pcm)
-                                    last_voice_time = time.time()
-                                else:
-                                    frames.append(pcm)
+                if voice_activity <= 0.3:
+                    if len(frames) > 0:
+                        last_voice_time = time.time()
+                        while time.time() - last_voice_time <= speech_threshold:
+                            pcm = audio_stream.read(cobra.frame_length, exception_on_overflow=False)
+                            pcm = struct.unpack_from("h" * cobra.frame_length, pcm)
+                            voice_activity = cobra.process(pcm)
+                            if voice_activity > 0.3:
+                                frames.append(pcm)
+                                last_voice_time = time.time()
+                            else:
+                                frames.append(pcm)
 
-                            print("Voice ended")
-                            pcm_data = np.hstack(frames).astype(np.int16)
-                            return pcm_data
-                        else:
-                            frames = []
-                            break
+                        print("Voice ended")
+                        pcm_data = np.hstack(frames).astype(np.int16)
+                        audio_stream.stop_stream()
+                        audio_stream.close()
+                        pa.terminate()
+                        cobra.delete()
+                        return pcm_data
+                    else:
+                        frames = []
+                        break
 
-            if time.time() - start_time > timeout:
-                print("No voice detected within the timeout period.")
-                return None
-    finally:
-        audio_stream.stop_stream()
-        audio_stream.close()
-        pa.terminate()
-        cobra.delete()
+        if time.time() - start_time > timeout:
+            print("No voice detected within the timeout period.")
+            audio_stream.stop_stream()
+            audio_stream.close()
+            pa.terminate()
+            cobra.delete()
+            return None
 
 def speech_to_text(pcm_data):
     audio_data = (pcm_data / 32768).astype(np.float32)
@@ -184,36 +290,78 @@ def streamed_audio(input_text, model='tts-1', voice='nova'):
     finally:
         audio.terminate()
 
+def handle_tool_calls(tool_calls, messages):
+    available_functions = {
+        "end_conversation": end_conversation,
+        "turn_on_light": turn_on_light,
+        "turn_off_light": turn_off_light
+    }
+
+    for tool_call in tool_calls:
+        function_name = tool_call.function.name
+        function_to_call = available_functions[function_name]
+        # Call the function and get the result (for example, turn the light on or off)
+        function_response = function_to_call(**json.loads(tool_call.function.arguments))
+        tool_message = {
+            "role": "tool",
+            "content": function_response,
+            "tool_call_id": tool_call.id  # Attach the response to the tool_call_id
+        }
+        messages.append(tool_message)  # Append the tool response message
+        print(f"Tool function {function_name} executed with response: {function_response}")
 
 def main():
-    personality = "You are a social robot for the elderly and your name is LEMMY. You were created at UNIST. You respond in short, friendly sentences that the elderly can understand."
+    personality = "You are a social robot for the elderly and your name is LEMMY."
     messages = [{"role": "system", "content": f"{personality}"}]
     tools = [
         {
             "type": "function",
             "function": {
                 "name": "end_conversation",
-                "description": "End the current conversation session with a friendly message such as goodbye, see you, take care, etc.",
+                "description": "End the current conversation session with a friendly message.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "turn_on_light",
+                "description": "Turn on the light in a specified location.",
                 "parameters": {
                     "type": "object",
-                    "properties": {},
-                    "required": []
+                    "properties": {
+                        "location": {"type": "string", "description": "Location (e.g., living room, bedroom)"}
+                    },
+                    "required": ["location"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "turn_off_light",
+                "description": "Turn off the light in a specified location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "Location (e.g., living room, bedroom)"}
+                    },
+                    "required": ["location"],
                 },
             },
         }
     ]
 
-    while True:
-        print("Entering wake-up word detection mode...")
-        wakeUpDetect = wakeUpWordRecognition()
-        
-        if wakeUpDetect:
-            print("Wake-up word detected. Entering listening mode...")
-            dialogueEnd = False
+    wakeUpDetect = False
+    dialogueEnd = False
 
+    while True:
+        if not wakeUpDetect:
+            wakeUpDetect = wakeUpWordRecognition()
+        else:
+            dialogueEnd = False
             while not dialogueEnd:
                 pcm_data = listen_for_voice()
-                
                 if isinstance(pcm_data, np.ndarray):
                     user_input = speech_to_text(pcm_data)
                     print(f'User: {user_input}')
@@ -222,42 +370,22 @@ def main():
                     
                     if lemmy_response:
                         print(f'LEMMY: {lemmy_response}')
-                        print("="*20)
                         streamed_audio(lemmy_response)
                     
                     if tool_calls:
-                        available_functions = {
-                            "end_conversation": end_conversation,
-                        }
-                        for tool_call in tool_calls:
-                            function_name = tool_call.function.name
-                            function_to_call = available_functions[function_name]
-                            function_response = function_to_call()
-                            messages.append(
-                                {
-                                    "tool_call_id": tool_call.id,
-                                    "role": "tool",
-                                    "name": function_name,
-                                    "content": function_response,
-                                }
-                            )
-                        final_message_content = json.loads(function_response)["message"]
-                        messages.append({"role": "assistant", "content": final_message_content})
-                        messages.append({"role": "user", "content": "Please end the conversation and say something nice."})
-                        
-                        final_response = client.chat.completions.create(
-                            model="gpt-4",
-                            messages=messages,
-                        )
-                        final_message = final_response.choices[0].message.content
-                        if final_message:
-                            print(f'LEMMY: {final_message}')
-                            streamed_audio(final_message)
-                            print("="*20)
-                        dialogueEnd = True  # End the dialogue and return to wake-up detection
+                        handle_tool_calls(tool_calls, messages)
+
+                    # Camera control based on voice commands
+                    if "turn on camera" in user_input.lower():
+                        turn_on_camera()
+                    elif "turn off camera" in user_input.lower():
+                        turn_off_camera()
+
+                    dialogueEnd = True
+                    wakeUpDetect = False
                 else:
-                    print("No voice detected. Returning to wake-up word detection.")
-                    break  # Exit listening loop to return to wake-up word detection mode
+                    print("No voice detected. Going back to wake-up word detection.")
+                    wakeUpDetect = False
 
 if __name__ == '__main__':
     main()
