@@ -168,7 +168,7 @@ def main():
         '--model',
         help='Name of the pose landmarker model bundle.',
         required=False,
-        default='pose_landmarker.task')
+        default='pose_landmarker.task') #Add pose landmark task file(Model)
     parser.add_argument(
         '--numPoses',
         help='Max number of poses that can be detected by the landmarker.',
