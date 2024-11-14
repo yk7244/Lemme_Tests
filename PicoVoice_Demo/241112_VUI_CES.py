@@ -97,7 +97,6 @@ def speech_to_text(pcm_data):
 
 def send_serial_data(data, port='/dev/ttyUSB0', baudrate=9600):
     """
-    Function to send data over serial to an external device.
     
     Parameters:
     - data: The data to be sent as a string.
@@ -113,17 +112,14 @@ def send_serial_data(data, port='/dev/ttyUSB0', baudrate=9600):
 
 # Demo: Wake-up, Speech-to-Text, and Serial Communication
 if __name__ == "__main__":
-    # Step 1: Wait for the wake-up word
     if wake_up_word_detection():
         print("Wake-up word detected. Listening for speech...")
 
-        # Step 2: Capture audio and convert it to text
         pcm_data = listen_for_voice()
         if pcm_data is not None:
             text = speech_to_text(pcm_data)
             print("Transcribed Text:", text)
             
-            # Step 3: Send the transcribed text over serial to the Orange Pi
             send_serial_data(text, port='/dev/ttyUSB0', baudrate=9600)
             print("Data sent to Android board.")
         else:
