@@ -1,5 +1,6 @@
 Picovoice Test 
 
+pip3 install pvporcupine pvrecorder whisper torch pyserial
 
-pip3 install requrirement.txt
-Run python3 modified.py
+
+
