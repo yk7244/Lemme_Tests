@@ -5,6 +5,9 @@ from pvrecorder import PvRecorder
 import whisper
 import torch
 import serial
+import pvcobra
+import pyaudio
+import struct
 
 # Initialize necessary variables
 access_key = ''  # Add your Porcupine access key here
@@ -12,7 +15,6 @@ keyword_paths = ['lemmy_jetson_1.ppn']  # Path to the wake word model file
 audio_device_index = -1  # Set audio device index (usually -1 for default)
 sensitivities = [0.5] * len(keyword_paths)  # Sensitivity for wake word detection
 library_path_porcupine = ''  # Path to Porcupine library
-speech_threshold = 1.3
 device = "cuda"  # Use GPU if available
 model = whisper.load_model("small").to(device)  # Load Whisper model
 
@@ -54,11 +56,8 @@ def wake_up_word_detection():
 def listen_for_voice():
     """
     Listens for voice input and returns the PCM data if voice activity is detected.
+    Stops recording when there is silence for 3 seconds.
     """
-    import pvcobra
-    import pyaudio
-    import struct
-
     cobra = pvcobra.create(access_key=access_key)
     pa = pyaudio.PyAudio()
     audio_stream = pa.open(
@@ -70,17 +69,38 @@ def listen_for_voice():
 
     print("Listening for voice...")
     frames = []
+    start_time = time.time()
+    silence_start = None
+    voice_detected = False
+
     while True:
         pcm = audio_stream.read(cobra.frame_length, exception_on_overflow=False)
         pcm = struct.unpack_from("h" * cobra.frame_length, pcm)
         voice_activity = cobra.process(pcm)
 
+        # Append frames if voice detected
         if voice_activity > 0.3:
             frames.append(pcm)
-            print("Voice detected!")
+            voice_detected = True
+            silence_start = time.time()  # Reset silence timer
+        elif voice_detected and (silence_start is None):
+            silence_start = time.time()  # Start silence timer if no voice
+
+        # Stop after 3 seconds of silence
+        if silence_start and (time.time() - silence_start > 3):
+            print("Silence detected for 3 seconds. Stopping recording.")
             break
 
-    pcm_data = np.hstack(frames).astype(np.int16)
+        # Timeout for no voice detected in 5 seconds after wake-up
+        if not voice_detected and (time.time() - start_time > 5):
+            print("No voice detected within 5 seconds after wake-up.")
+            audio_stream.stop_stream()
+            audio_stream.close()
+            pa.terminate()
+            cobra.delete()
+            return None
+
+    pcm_data = np.hstack(frames).astype(np.int16) if frames else None
     audio_stream.stop_stream()
     audio_stream.close()
     pa.terminate()
@@ -97,6 +117,7 @@ def speech_to_text(pcm_data):
 
 def send_serial_data(data, port='/dev/ttyUSB0', baudrate=9600):
     """
+    Function to send data over serial to an external device.
     
     Parameters:
     - data: The data to be sent as a string.
@@ -110,17 +131,21 @@ def send_serial_data(data, port='/dev/ttyUSB0', baudrate=9600):
     except serial.SerialException as e:
         print("Error in serial communication:", e)
 
-# Demo: Wake-up, Speech-to-Text, and Serial Communication
+# Main loop to repeatedly detect wake word, listen, transcribe, and send data
 if __name__ == "__main__":
-    if wake_up_word_detection():
-        print("Wake-up word detected. Listening for speech...")
+    while True:
+        # Step 1: Wait for the wake-up word
+        if wake_up_word_detection():
+            print("Wake-up word detected. Listening for speech...")
 
-        pcm_data = listen_for_voice()
-        if pcm_data is not None:
-            text = speech_to_text(pcm_data)
-            print("Transcribed Text:", text)
-            
-            send_serial_data(text, port='/dev/ttyUSB0', baudrate=9600)
-            print("Data sent to Android board.")
-        else:
-            print("No voice data detected.")
+            # Step 2: Capture audio and convert it to text
+            pcm_data = listen_for_voice()
+            if pcm_data is not None:
+                text = speech_to_text(pcm_data)
+                print("Transcribed Text:", text)
+                
+                # Step 3: Send the transcribed text over serial to the Orange Pi
+                send_serial_data(text, port='/dev/ttyUSB0', baudrate=9600)
+                print("Data sent to Android board.")
+            else:
+                print("Returning to wake-up word detection mode due to timeout.")
